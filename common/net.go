@@ -1,6 +1,7 @@
 package common
 
 import (
+	"context"
 	"crypto/tls"
 	"net"
 	"sync"
@@ -8,6 +9,10 @@ import (
 	log "github.com/liudanking/goutil/logutil"
 
 	quic "github.com/lucas-clemente/quic-go"
+)
+
+const (
+	KQuicProxy = "quic-proxy"
 )
 
 type QuicListener struct {
@@ -31,7 +36,7 @@ func NewQuicListener(l quic.Listener) *QuicListener {
 
 func (ql *QuicListener) doAccept() {
 	for {
-		sess, err := ql.Listener.Accept()
+		sess, err := ql.Listener.Accept(context.TODO())
 		if err != nil {
 			log.Error("accept session failed:%v", err)
 			continue
@@ -40,7 +45,7 @@ func (ql *QuicListener) doAccept() {
 
 		go func(sess quic.Session) {
 			for {
-				stream, err := sess.AcceptStream()
+				stream, err := sess.AcceptStream(context.TODO())
 				if err != nil {
 					log.Notice("accept stream failed:%v", err)
 					sess.Close()
@@ -91,7 +96,10 @@ func (qd *QuicDialer) Dial(network, addr string) (net.Conn, error) {
 	defer qd.Unlock()
 
 	if qd.sess == nil {
-		sess, err := quic.DialAddr(addr, &tls.Config{InsecureSkipVerify: qd.skipCertVerify}, nil)
+		sess, err := quic.DialAddr(addr, &tls.Config{
+			InsecureSkipVerify: qd.skipCertVerify,
+			NextProtos:         []string{KQuicProxy},
+		}, nil)
 		if err != nil {
 			log.Error("dial session failed:%v", err)
 			return nil, err
@@ -99,18 +107,21 @@ func (qd *QuicDialer) Dial(network, addr string) (net.Conn, error) {
 		qd.sess = sess
 	}
 
-	stream, err := qd.sess.OpenStreamSync()
+	stream, err := qd.sess.OpenStreamSync(context.TODO())
 	if err != nil {
 		log.Info("[1/2] open stream from session no success:%v, try to open new session", err)
 		qd.sess.Close()
-		sess, err := quic.DialAddr(addr, &tls.Config{InsecureSkipVerify: true}, nil)
+		sess, err := quic.DialAddr(addr, &tls.Config{
+			InsecureSkipVerify: true,
+			NextProtos:         []string{KQuicProxy},
+		}, nil)
 		if err != nil {
 			log.Error("[2/2] dial new session failed:%v", err)
 			return nil, err
 		}
 		qd.sess = sess
 
-		stream, err = qd.sess.OpenStreamSync()
+		stream, err = qd.sess.OpenStreamSync(context.TODO())
 		if err != nil {
 			log.Error("[2/2] open stream from new session failed:%v", err)
 			return nil, err
